@@ -7,7 +7,7 @@ Designed for local development, GitHub Codespaces, and reusable Docker-based dev
 Features
 Ubuntu 24.04 LTS
 OCaml 5.5.2
-OPAM 2.6.1
+OPAM latest stable
 Dune
 OCaml Language Server
 Merlin
@@ -75,13 +75,15 @@ Installed versions
 Component	Version
 Ubuntu	24.04
 OCaml	5.5.2
-OPAM	2.6.1
+OPAM	latest stable
 Dune	OPAM-resolved
 OCaml LSP	OPAM-resolved
 Merlin	OPAM-resolved
 OCamlformat	OPAM-resolved
 Utop	OPAM-resolved
 Odoc	OPAM-resolved
+
+OPAM defaults to the latest stable release; set the `OPAM_VERSION` build argument to pin a specific version.
 Verify your installation
 bash
 ocaml --version
@@ -101,22 +103,22 @@ Run the application:
 bash
 dune exec my_project
 
-Customize compiler versions
+Customize toolchain versions
 
 The Dockerfile supports build arguments:
 
 dockerfile
-ARG OPAM_VERSION=2.6.1
 ARG OCAML_VERSION=5.5.2
+ARG OPAM_VERSION=latest
 
 
-You can change these values when building your own image.
+You can change these values when building your own image. Set OPAM_VERSION to latest to install the newest stable release, or to a version such as 2.6.1 to pin it.
 
 Build the image locally
 bash
 docker build \
   --build-arg OCAML_VERSION=5.5.2 \
-  --build-arg OPAM_VERSION=2.6.1 \
+  --build-arg OPAM_VERSION=latest \
   -t ocaml-opam-devcontainer:local .
 
 Published images
