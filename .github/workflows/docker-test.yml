@@ -11,11 +11,34 @@ permissions:
   contents: read
 
 jobs:
-  # The reusable workflow builds the image once and scans it, so there is no
-  # separate build job here (that would build the same image twice per PR).
-  security-scan:
-    uses: ./.github/workflows/security-scan.yml
+  build:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Needed so the scan can post its results as a pull request comment.
+      # Needed by the composite action to comment on pull requests.
       pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build once and load the image so the composite action can scan it.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ocaml-opam-devcontainer:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: ./.github/actions/security-scan
+        with:
+          image-ref: ocaml-opam-devcontainer:test

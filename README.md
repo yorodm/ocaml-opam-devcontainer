@@ -139,7 +139,9 @@ linux/arm64
 
 Security scanning
 
-The image is built and scanned with Trivy by a reusable `security-scan` workflow. The test workflow runs only this job, and the publish workflow uses it as a gate for its multi-arch build. Pull requests fail and publishes are skipped when the image contains fixable CRITICAL or HIGH severity vulnerabilities.
+The image is scanned with Trivy by the `security-scan` composite action. The test workflow builds the image once and scans it, posting the results as a pull request comment. The publish workflow builds the multi-arch image once under a temporary `staging` tag, scans that exact digest, and only creates the release tags if the scan passes.
+
+The `staging` tag is internal to the release pipeline and is overwritten on each release.
 
 On pull requests, the scan updates a single sticky comment with the findings. Pull requests from forks run with a read-only token, so their results are only available in the workflow run summary.
 

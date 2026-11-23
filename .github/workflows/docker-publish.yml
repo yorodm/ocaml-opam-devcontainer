@@ -11,18 +11,13 @@ permissions:
   contents: read
   packages: write
 
-jobs:
-  # Required gate: builds and scans linux/amd64 before anything is published.
-  # The multi-arch build below reuses these amd64 layers from the Actions cache.
-  security-scan:
-    uses: ./.github/workflows/security-scan.yml
-    permissions:
-      contents: read
-      # Granted because the shared workflow may post PR comments; unused here.
-      pull-requests: write
+# Serialize publish runs because they share a temporary staging tag.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
+jobs:
   publish:
-    needs: security-scan
     runs-on: ubuntu-latest
 
     steps:
@@ -52,16 +47,37 @@ jobs:
             type=ref,event=tag
             type=sha
 
-      - name: Build and publish
+      # Build once and push under a temporary tag so the exact digest can be
+      # scanned before the release tags are created.
+      - name: Build and push staging image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ghcr.io/${{ github.repository }}:staging
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: ./.github/actions/security-scan
+        with:
+          image-ref: "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+
+      # Create the release tags only if the scan passed.
+      - name: Promote scanned image to release tags
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          printf '%s\n' "$TAGS" | while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Tagging $tag"
+            docker buildx imagetools create --tag "$tag" \
+              "ghcr.io/${{ github.repository }}@$DIGEST"
+          done
