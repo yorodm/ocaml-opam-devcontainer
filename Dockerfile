@@ -12,6 +12,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Toolchain versions
 ARG OCAML_VERSION=5.5.2
+# "latest" installs the newest stable opam release; set a version to pin it.
+ARG OPAM_VERSION=latest
 
 ENV OPAMYES=1
 ENV OPAMROOT=/home/vscode/.opam
@@ -19,24 +21,46 @@ ENV OPAMROOT=/home/vscode/.opam
 # Install system dependencies
 USER root
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    bubblewrap \
-    ca-certificates \
-    curl \
-    git \
-    m4 \
-    pkg-config \
-    unzip \
-    xz-utils \
-    rsync \
-    libgmp-dev \
-    libev-dev \
+# Keep update, upgrade and install in one layer: the package lists are removed
+# at the end, so a separate `apt-get install` layer would have no index and fail
+# with exit code 100.
+RUN apt-get update \
+    && apt-get upgrade -y -o Dpkg::Options::="--force-confold" \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        bubblewrap \
+        ca-certificates \
+        curl \
+        git \
+        m4 \
+        pkg-config \
+        unzip \
+        xz-utils \
+        rsync \
+        libgmp-dev \
+        libev-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install opam
-RUN curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh | \
-    bash -s -- --no-backup
+# Install the requested opam binary directly from its GitHub release instead
+# of running the installer script. Release assets are named
+# opam-<version>-<arch>-linux.
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+        amd64) OPAM_ARCH=x86_64 ;; \
+        arm64) OPAM_ARCH=arm64 ;; \
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac; \
+    if [ -z "$OPAM_VERSION" ] || [ "$OPAM_VERSION" = "latest" ]; then \
+        OPAM_TAG_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ocaml/opam/releases/latest)"; \
+        OPAM_TAG_URL="${OPAM_TAG_URL%/}"; \
+        OPAM_VERSION="${OPAM_TAG_URL##*/}"; \
+    fi; \
+    curl -fsSL \
+        "https://github.com/ocaml/opam/releases/download/${OPAM_VERSION}/opam-${OPAM_VERSION}-${OPAM_ARCH}-linux" \
+        -o /usr/local/bin/opam; \
+    chmod +x /usr/local/bin/opam; \
+    opam --version
 
 # Switch to the non-root development user
 USER vscode

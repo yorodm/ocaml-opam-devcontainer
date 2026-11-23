@@ -5,8 +5,7 @@
     "dockerfile": "../Dockerfile",
     "context": "..",
     "args": {
-      "OCAML_VERSION": "5.5.2",
-      "OPAM_VERSION": "2.6.1"
+      "OCAML_VERSION": "5.5.2"
     }
   },
   "remoteUser": "vscode",

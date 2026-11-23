@@ -7,7 +7,7 @@ Designed for local development, GitHub Codespaces, and reusable Docker-based dev
 Features
 Ubuntu 24.04 LTS
 OCaml 5.5.2
-OPAM 2.6.1
+OPAM latest stable
 Dune
 OCaml Language Server
 Merlin
@@ -18,6 +18,7 @@ Non-root development user
 Multi-platform Docker images (AMD64 and ARM64)
 GitHub Actions automated builds
 Published Docker image on GitHub Container Registry
+Automated container vulnerability scanning with Trivy
 Quick start
 Requirements
 Docker Desktop or Docker Engine
@@ -74,13 +75,15 @@ Installed versions
 Component	Version
 Ubuntu	24.04
 OCaml	5.5.2
-OPAM	2.6.1
+OPAM	latest stable
 Dune	OPAM-resolved
 OCaml LSP	OPAM-resolved
 Merlin	OPAM-resolved
 OCamlformat	OPAM-resolved
 Utop	OPAM-resolved
 Odoc	OPAM-resolved
+
+OPAM defaults to the latest stable release; set the `OPAM_VERSION` build argument to pin a specific version.
 Verify your installation
 bash
 ocaml --version
@@ -100,22 +103,22 @@ Run the application:
 bash
 dune exec my_project
 
-Customize compiler versions
+Customize toolchain versions
 
 The Dockerfile supports build arguments:
 
 dockerfile
-ARG OPAM_VERSION=2.6.1
 ARG OCAML_VERSION=5.5.2
+ARG OPAM_VERSION=latest
 
 
-You can change these values when building your own image.
+You can change these values when building your own image. Set OPAM_VERSION to latest to install the newest stable release, or to a version such as 2.6.1 to pin it.
 
 Build the image locally
 bash
 docker build \
   --build-arg OCAML_VERSION=5.5.2 \
-  --build-arg OPAM_VERSION=2.6.1 \
+  --build-arg OPAM_VERSION=latest \
   -t ocaml-opam-devcontainer:local .
 
 Published images
@@ -133,6 +136,15 @@ The image is built for:
 
 linux/amd64
 linux/arm64
+
+Security scanning
+
+The image is built and scanned with Trivy by a reusable `security-scan` workflow. The test workflow runs only this job, and the publish workflow uses it as a gate for its multi-arch build. Pull requests fail and publishes are skipped when the image contains fixable CRITICAL or HIGH severity vulnerabilities.
+
+On pull requests, the scan updates a single sticky comment with the findings. Pull requests from forks run with a read-only token, so their results are only available in the workflow run summary.
+
+Unfixed vulnerabilities are ignored because they cannot be remediated. To accept a specific finding, add its ID to a `.trivyignore` file at the repository root.
+
 Development
 
 Contributions are welcome!
