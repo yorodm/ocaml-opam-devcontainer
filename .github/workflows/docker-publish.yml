@@ -1,4 +1,3 @@
-
 name: Build and Publish OCaml Dev Container
 
 on:
@@ -17,15 +16,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  # Build each platform on a matching native runner. Building linux/arm64 under
+  # QEMU on an amd64 runner is extremely slow because OCaml is compiled from
+  # source, so we avoid emulation entirely and build the platforms in parallel.
+  #
+  # `ubuntu-24.04-arm` is available for public repositories and for private
+  # repositories on plans that include arm64 hosted runners. If it is not
+  # available to you, fall back to a single `ubuntu-latest` job with
+  # `docker/setup-qemu-action` and both platforms in one build (slower).
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            # Cache/artifact safe form of the platform (no slash).
+            platform_pair: linux-amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            platform_pair: linux-arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,33 +62,142 @@ jobs:
             type=ref,event=tag
             type=sha
 
-      # Build once and push under a temporary tag so the exact digest can be
-      # scanned before the release tags are created.
-      - name: Build and push staging image
+      # Push by digest only; the per-platform manifests are combined into a
+      # single multi-arch image by the `merge` job below.
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository }}:staging
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           provenance: true
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache is shared across workflow runs and git refs, so a
+          # tag-triggered publish can reuse layers from earlier publishes
+          # instead of starting cold. Each platform gets its own ref so the
+          # parallel matrix jobs never overwrite each other's cache.
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-${{ matrix.platform_pair }}
+            type=gha
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-${{ matrix.platform_pair }},mode=max
+            type=gha,mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.platform_pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  # Combine the per-platform manifests into one multi-arch image under a
+  # temporary staging tag so the exact digest can be scanned before release.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Create multi-arch staging image
+        id: merge
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          digests=()
+          for file in /tmp/digests/*; do
+            digests+=("${IMAGE}@sha256:$(basename "${file}")")
+          done
+          docker buildx imagetools create --tag "${IMAGE}:staging" "${digests[@]}"
+          digest="$(docker buildx imagetools inspect "${IMAGE}:staging" --format '{{.Manifest.Digest}}')"
+          echo "Merged digest: ${digest}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+  # Scan the merged image and fail the release if fixable CRITICAL/HIGH
+  # vulnerabilities are found.
+  security-scan:
+    needs: merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Scan image for vulnerabilities
         uses: ./.github/actions/security-scan
         with:
-          image-ref: "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+          image-ref: "ghcr.io/${{ github.repository }}@${{ needs.merge.outputs.digest }}"
 
-      # Create the release tags only if the scan passed.
+  # Create the release tags only if the scan passed.
+  promote:
+    needs: [merge, security-scan]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Promote scanned image to release tags
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ needs.merge.outputs.tags }}
+          DIGEST: ${{ needs.merge.outputs.digest }}
         run: |
           printf '%s\n' "$TAGS" | while IFS= read -r tag; do
             [ -n "$tag" ] || continue

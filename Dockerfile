@@ -14,6 +14,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG OCAML_VERSION=5.5.2
 # "latest" installs the newest stable opam release; set a version to pin it.
 ARG OPAM_VERSION=latest
+# Parallelism for opam builds/downloads (GitHub-hosted runners have 4 vCPUs).
+ARG OPAMJOBS=4
+ARG OPAMDOWNLOADJOBS=4
 
 ENV OPAMYES=1
 ENV OPAMROOT=/home/vscode/.opam
@@ -67,10 +70,16 @@ USER vscode
 
 WORKDIR /workspaces
 
-# Initialize OPAM and install OCaml
-RUN opam init --bare --disable-sandboxing -y \
-    && opam switch create default "${OCAML_VERSION}" -y \
-    && opam install --switch=default -y \
+# Initialize OPAM
+RUN opam init --bare --disable-sandboxing -y
+
+# Build the compiler in its own layer so changing the tool list below does not
+# force a full OCaml rebuild.
+RUN opam switch create default "${OCAML_VERSION}" -y \
+    && opam clean -s -y
+
+# Install the development tools in a separate, cacheable layer
+RUN opam install --switch=default -y \
         dune \
         ocaml-lsp-server \
         ocamlformat \
