@@ -1,0 +1,10 @@
+
+.git
+.github
+.devcontainer
+.vscode
+_build
+_opam
+*.opam.locked
+.env
+.env.*

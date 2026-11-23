@@ -1,0 +1,31 @@
+
+# OCaml
+*.cmi
+*.cmo
+*.cmx
+*.cmxa
+*.cma
+*.cmxs
+*.o
+*.a
+*.annot
+*.cmt
+*.cmti
+
+# Dune
+_build/
+
+# OPAM
+_opam/
+
+# Editor
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*

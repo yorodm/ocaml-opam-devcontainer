@@ -1,0 +1,31 @@
+
+{
+  "name": "OCaml + OPAM",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "args": {
+      "OCAML_VERSION": "5.5.2",
+      "OPAM_VERSION": "2.6.1"
+    }
+  },
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ocamllabs.ocaml-platform"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[ocaml]": {
+          "editor.defaultFormatter": "ocamllabs.ocaml-platform"
+        },
+        "files.eol": "\n"
+      }
+    }
+  },
+  "postCreateCommand": "bash scripts/check-environment.sh",
+  "shutdownAction": "stopContainer"
+}
