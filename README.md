@@ -18,6 +18,7 @@ Non-root development user
 Multi-platform Docker images (AMD64 and ARM64)
 GitHub Actions automated builds
 Published Docker image on GitHub Container Registry
+Automated container vulnerability scanning with Trivy
 Quick start
 Requirements
 Docker Desktop or Docker Engine
@@ -133,6 +134,13 @@ The image is built for:
 
 linux/amd64
 linux/arm64
+
+Security scanning
+
+The container image is built and scanned with Trivy by a reusable `security-scan` workflow. Both the test and publish workflows depend on it, so pull requests fail and publishes are skipped when the image contains fixable CRITICAL or HIGH severity vulnerabilities.
+
+Unfixed vulnerabilities are ignored because they cannot be remediated. To accept a specific finding, add its ID to a `.trivyignore` file at the repository root.
+
 Development
 
 Contributions are welcome!
