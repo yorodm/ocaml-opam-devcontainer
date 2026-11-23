@@ -19,7 +19,11 @@ ENV OPAMROOT=/home/vscode/.opam
 # Install system dependencies
 USER root
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && apt-get upgrade -y \
+    -o Dpkg::Options::="--force-confold" \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get install -y --no-install-recommends \
     build-essential \
     bubblewrap \
     ca-certificates \

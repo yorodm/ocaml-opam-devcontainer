@@ -12,10 +12,14 @@ permissions:
   packages: write
 
 jobs:
+  # Required gate: builds and scans linux/amd64 before anything is published.
+  # The multi-arch build below reuses these amd64 layers from the Actions cache.
   security-scan:
     uses: ./.github/workflows/security-scan.yml
     permissions:
       contents: read
+      # Granted because the shared workflow may post PR comments; unused here.
+      pull-requests: write
 
   publish:
     needs: security-scan

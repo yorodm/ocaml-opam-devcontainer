@@ -137,7 +137,9 @@ linux/arm64
 
 Security scanning
 
-The container image is built and scanned with Trivy by a reusable `security-scan` workflow. Both the test and publish workflows depend on it, so pull requests fail and publishes are skipped when the image contains fixable CRITICAL or HIGH severity vulnerabilities.
+The image is built and scanned with Trivy by a reusable `security-scan` workflow. The test workflow runs only this job, and the publish workflow uses it as a gate for its multi-arch build. Pull requests fail and publishes are skipped when the image contains fixable CRITICAL or HIGH severity vulnerabilities.
+
+On pull requests, the scan updates a single sticky comment with the findings. Pull requests from forks run with a read-only token, so their results are only available in the workflow run summary.
 
 Unfixed vulnerabilities are ignored because they cannot be remediated. To accept a specific finding, add its ID to a `.trivyignore` file at the repository root.
 

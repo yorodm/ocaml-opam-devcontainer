@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   scan:
@@ -21,7 +22,8 @@ jobs:
 
       # Build a single-platform image so it can be loaded locally and scanned.
       # The amd64 layers are representative of the arm64 image built from the
-      # same Dockerfile.
+      # same Dockerfile. This is the only build in the PR pipeline; release
+      # builds reuse these layers through the Actions build cache.
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -38,12 +40,124 @@ jobs:
       # vulnerabilities. Unfixed issues are ignored, since they cannot be
       # remediated and would otherwise block unrelated changes.
       - name: Scan image for vulnerabilities
+        id: scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ocaml-opam-devcontainer:scan
           format: table
+          output: trivy-results.txt
           exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
           vuln-type: 'os,library'
           timeout: '10m'
+
+      # Keep the report visible in the run summary, including for pull requests
+      # from forks where the token is read-only and cannot post a comment.
+      - name: Add scan report to job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          if [ -f trivy-results.txt ]; then
+            {
+              echo '## Container vulnerability scan'
+              echo
+              echo '```'
+              head -c 500000 trivy-results.txt
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Update a single sticky comment on the pull request with the results.
+      # Only same-repository pull requests are commented on: GITHUB_TOKEN is
+      # read-only for pull requests from forks.
+      - name: Post scan results to pull request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- trivy-scan-report -->';
+            const reportPath = `${process.env.GITHUB_WORKSPACE}/trivy-results.txt`;
+
+            let report = '';
+            try {
+              report = fs.readFileSync(reportPath, 'utf8').trim();
+            } catch (error) {
+              report = `No report was generated.\n${error.message}`;
+            }
+
+            const escapeHtml = (value) => value
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+
+            // GitHub comments are limited to 65536 characters.
+            let escapedReport = escapeHtml(report);
+            const limit = 60000;
+            const truncated = escapedReport.length > limit;
+            if (truncated) {
+              escapedReport = escapedReport.slice(0, limit);
+            }
+
+            const failed = process.env.SCAN_OUTCOME === 'failure';
+            const hasFindings = /(?:CRITICAL|HIGH):\s*[1-9]/.test(report);
+
+            let summary;
+            if (hasFindings) {
+              summary = '❌ Trivy found fixable CRITICAL or HIGH severity vulnerabilities.';
+            } else if (failed) {
+              summary = '⚠️ The vulnerability scan did not complete successfully.';
+            } else {
+              summary = '✅ No fixable CRITICAL or HIGH severity vulnerabilities found.';
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.pull_request.number;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const body = [
+              marker,
+              '## Container vulnerability scan',
+              '',
+              summary,
+              '',
+              `[View the workflow run](${runUrl})`,
+              '',
+              '<details>',
+              '<summary>Full Trivy report</summary>',
+              '',
+              '<pre>',
+              escapedReport,
+              '</pre>',
+              ...(truncated ? ['', '_Report truncated to fit the comment size limit._'] : []),
+              '</details>',
+            ].join('\n');
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
