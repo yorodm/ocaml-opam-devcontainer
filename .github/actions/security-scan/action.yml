@@ -1,30 +1,100 @@
 
 name: Container Security Scan
-description: Scan a container image with Trivy, add the report to the job summary, and comment on pull requests.
+description: Install Trivy, scan a container image, add the report to the job summary, and comment on pull requests.
 
 inputs:
   image-ref:
     description: "Image reference to scan (local tag, registry reference, or digest)."
     required: true
+  trivy-version:
+    description: "Trivy release to install."
+    required: false
+    default: "v0.70.0"
 
 runs:
   using: composite
   steps:
+    - name: Install Trivy
+      id: install-trivy
+      shell: bash
+      env:
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+      run: |
+        set -euo pipefail
+
+        version="${TRIVY_VERSION#v}"
+        tag="v${version}"
+
+        if [ "$(uname -s)" != "Linux" ]; then
+          echo "Unsupported OS: $(uname -s)" >&2
+          exit 1
+        fi
+
+        case "$(uname -m)" in
+          x86_64) arch=64bit ;;
+          aarch64|arm64) arch=ARM64 ;;
+          *)
+            echo "Unsupported architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        base="https://github.com/aquasecurity/trivy/releases/download/${tag}"
+        archive="trivy_${version}_Linux-${arch}.tar.gz"
+        checksums="trivy_${version}_checksums.txt"
+        workdir="$(mktemp -d)"
+        trap 'rm -rf "${workdir}"' EXIT
+
+        curl -fsSL -o "${workdir}/${archive}" "${base}/${archive}"
+        curl -fsSL -o "${workdir}/${checksums}" "${base}/${checksums}"
+
+        checksum_line="$(awk -v archive="${archive}" '$2 == archive { print }' "${workdir}/${checksums}")"
+        if [ -z "${checksum_line}" ]; then
+          echo "Checksum not found for ${archive}" >&2
+          exit 1
+        fi
+        (cd "${workdir}" && printf '%s\n' "${checksum_line}" | sha256sum -c -)
+
+        install -d "${RUNNER_TEMP}/trivy-bin"
+        tar -xzf "${workdir}/${archive}" -C "${RUNNER_TEMP}/trivy-bin" trivy
+        chmod +x "${RUNNER_TEMP}/trivy-bin/trivy"
+
+        echo "trivy=${RUNNER_TEMP}/trivy-bin/trivy" >> "$GITHUB_OUTPUT"
+        "${RUNNER_TEMP}/trivy-bin/trivy" --version
+
+    - name: Get current date
+      id: trivy-date
+      shell: bash
+      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Trivy database
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/trivy-cache
+        key: trivy-db-${{ runner.os }}-${{ inputs.trivy-version }}-${{ steps.trivy-date.outputs.date }}
+        restore-keys: |
+          trivy-db-${{ runner.os }}-${{ inputs.trivy-version }}-
+
     - name: Scan image for vulnerabilities
       id: scan
       # Keep going so the report and PR comment are still published; the final
       # step fails the action if the scan found anything.
       continue-on-error: true
-      uses: aquasecurity/trivy-action@0.36.0
-      with:
-        image-ref: ${{ inputs.image-ref }}
-        format: table
-        output: trivy-results.txt
-        exit-code: '1'
-        ignore-unfixed: true
-        severity: 'CRITICAL,HIGH'
-        vuln-type: 'os,library'
-        timeout: '10m'
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image-ref }}
+        TRIVY_BIN: ${{ steps.install-trivy.outputs.trivy }}
+        TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+      run: |
+        "${TRIVY_BIN}" image \
+          --format table \
+          --output trivy-results.txt \
+          --exit-code 1 \
+          --ignore-unfixed \
+          --severity CRITICAL,HIGH \
+          --pkg-types os,library \
+          --timeout 10m \
+          "${IMAGE_REF}"
 
     # Keep the report visible in the job summary, including for pull requests
     # from forks where the token is read-only and cannot post a comment.
