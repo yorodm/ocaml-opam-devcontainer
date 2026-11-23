@@ -11,7 +11,6 @@ LABEL org.opencontainers.image.licenses="MIT"
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Toolchain versions
-ARG OPAM_VERSION=2.6.1
 ARG OCAML_VERSION=5.5.2
 
 ENV OPAMYES=1
@@ -35,9 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libev-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install a pinned OPAM binary
-RUN bash -c \
-    'sh <(curl -fsSL https://opam.ocaml.org/install.sh) --version "${OPAM_VERSION}"'
+# Install opam
+RUN curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh | \
+    bash -s -- --no-backup
 
 # Switch to the non-root development user
 USER vscode
