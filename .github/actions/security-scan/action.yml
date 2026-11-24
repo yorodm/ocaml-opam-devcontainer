@@ -6,10 +6,22 @@ inputs:
   image-ref:
     description: "Image reference to scan (local tag, registry reference, or digest)."
     required: true
-  trivy-version:
-    description: "Trivy release to install."
+  platform:
+    description: >-
+      Platform to scan, passed to Trivy as --platform. Leave empty to let Trivy
+      use its default for the image source: required for locally loaded
+      single-arch images, but explicit is preferred for multi-arch registry
+      digests so the result does not depend on the runner architecture.
     required: false
-    default: "v0.70.0"
+    default: ""
+  trivy-version:
+    description: >-
+      Trivy release to install, pinned to an exact version and verified against
+      the release checksums. Upgrades are manual: change this value only when a
+      newer release is actually needed (for example a scanner bug affecting the
+      gate) and re-run CI to confirm the scan still behaves.
+    required: false
+    default: "v0.76.2"
 
 runs:
   using: composite
@@ -68,7 +80,7 @@ runs:
       run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
     - name: Cache Trivy database
-      uses: actions/cache@v6
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ runner.temp }}/trivy-cache
         key: trivy-db-${{ runner.os }}-${{ inputs.trivy-version }}-${{ steps.trivy-date.outputs.date }}
@@ -85,8 +97,14 @@ runs:
         IMAGE_REF: ${{ inputs.image-ref }}
         TRIVY_BIN: ${{ steps.install-trivy.outputs.trivy }}
         TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+        TRIVY_PLATFORM: ${{ inputs.platform }}
       run: |
+        platform_args=()
+        if [ -n "${TRIVY_PLATFORM}" ]; then
+          platform_args=(--platform "${TRIVY_PLATFORM}")
+        fi
         "${TRIVY_BIN}" image \
+          "${platform_args[@]}" \
           --format table \
           --output trivy-results.txt \
           --exit-code 1 \
@@ -120,7 +138,7 @@ runs:
     - name: Post scan results to pull request
       if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
       continue-on-error: true
-      uses: actions/github-script@v9
+      uses: actions/github-script@v9.0.0
       env:
         SCAN_OUTCOME: ${{ steps.scan.outcome }}
       with:
@@ -150,15 +168,15 @@ runs:
           }
 
           const failed = process.env.SCAN_OUTCOME === 'failure';
-          const hasFindings = /(?:CRITICAL|HIGH):\s*[1-9]/.test(report);
 
+          // Pass/fail comes only from the scan exit code (--exit-code 1).
+          // Severity counts also appear inside vulnerability descriptions, so
+          // inferring the outcome from the report text can lie.
           let summary;
-          if (hasFindings) {
-            summary = '❌ Trivy found fixable CRITICAL or HIGH severity vulnerabilities.';
-          } else if (failed) {
-            summary = '⚠️ The vulnerability scan did not complete successfully.';
+          if (failed) {
+            summary = '\u274c The vulnerability scan failed: fixable CRITICAL or HIGH findings were reported, or the scan could not complete. See the report below.';
           } else {
-            summary = '✅ No fixable CRITICAL or HIGH severity vulnerabilities found.';
+            summary = '\u2705 No fixable CRITICAL or HIGH severity vulnerabilities found.';
           }
 
           const owner = context.repo.owner;

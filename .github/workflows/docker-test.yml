@@ -1,4 +1,3 @@
-
 name: Test Docker Image
 
 on:
@@ -12,33 +11,65 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # Pull-request builds from forks get a read-only token regardless of this
+    # grant, so pull-requests: write only ever applies to same-repository runs.
+    # It is required by the scan action to update the sticky report comment, and
+    # only the amd64 leg that performs the scan declares it in practice.
     permissions:
       contents: read
-      # Needed by the composite action to comment on pull requests.
       pull-requests: write
+
+    # Build both published architectures on their native runners so an
+    # arm64-only Dockerfile regression is caught before release. Only the amd64
+    # leg is scanned and commented on: the release gate treats the amd64 image
+    # as representative, and two comments per run would be noise.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_pair: linux-amd64
+            runner: ubuntu-latest
+            scan: true
+          - platform: linux/arm64
+            platform_pair: linux-arm64
+            runner: ubuntu-24.04-arm
+            scan: false
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4.4.1
 
-      # Build once and load the image so the composite action can scan it.
+      # Build once and load the image on the scanning leg so the composite
+      # action can scan it.
+      #
+      # The registry cache written by the publish workflow is read here (the
+      # package is public, so no credentials are needed). It is deliberately
+      # not written to: pull requests run untrusted code, and the release cache
+      # should only be produced by merged commits.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: false
-          load: true
+          load: ${{ matrix.scan }}
           tags: ocaml-opam-devcontainer:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-${{ matrix.platform_pair }}
+            type=gha,scope=${{ matrix.platform_pair }}
+          cache-to: type=gha,scope=${{ matrix.platform_pair }},mode=max
 
       - name: Scan image for vulnerabilities
+        if: ${{ matrix.scan }}
         uses: ./.github/actions/security-scan
         with:
+          # A locally loaded single-arch image: leave platform unset so Trivy
+          # uses the image it already has instead of filtering by platform.
           image-ref: ocaml-opam-devcontainer:test
